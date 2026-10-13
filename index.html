@@ -97,7 +97,10 @@
     color:var(--ink);
     font-weight:600;
   }
-  input[type=text], input[type=number], input[type=date], input[type=email], textarea{
+  .tracker-status{font-size:12px;font-weight:700;text-align:center;min-height:16px;color:var(--muted);}
+  .tracker-status.ok{color:#1F7A3A;}
+  .tracker-status.err{color:#B3261E;}
+  input[type=text], input[type=number], input[type=date], input[type=email], select, textarea{
     width:100%;
     padding:8px 10px;
     border:1px solid var(--line);
@@ -273,6 +276,17 @@
   .doc-section p, .doc-section li{font-size:12px;line-height:1.6;color:#333;}
   .doc-section ol{padding-left:18px;margin:0;}
   .doc-section li{margin-bottom:8px;}
+  /* inspection photos: panel */
+  .photo-add{display:block;width:100%;text-align:center;}
+  .photo-hint{font-size:11.5px;color:var(--muted);margin:6px 0 0;line-height:1.4;}
+  .photo-thumbs{display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-top:10px;}
+  .photo-thumbs:empty{display:none;}
+  .photo-thumb{position:relative;border-radius:6px;overflow:hidden;border:1px solid var(--line);aspect-ratio:4/3;background:#EEE;}
+  .photo-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
+  .photo-thumb button{position:absolute;top:4px;right:4px;width:26px;height:26px;padding:0;border-radius:50%;background:rgba(0,0,0,.72);color:#fff;font-size:15px;line-height:26px;}
+  /* inspection photos: on the estimate */
+  .photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;}
+  .photo-grid img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;border-radius:4px;border:1px solid #DDD;break-inside:avoid;page-break-inside:avoid;}
   .sig-block{margin-top:26px;font-size:12px;line-height:2;}
   .fill-line{border-bottom:1px solid #999;display:inline-block;min-width:220px;}
   .empty-hint{color:#AAAAA0;}
@@ -366,6 +380,13 @@
         <label class="field"><span>Date sent</span><input type="date" id="sentDate"></label>
       </div>
       <label class="field"><span>Crawlspace sq. ft.</span><input type="number" id="sqft" value="1100" min="1"></label>
+      <label class="field"><span>Prepared by</span>
+        <select id="preparedBy">
+          <option value="">Select…</option>
+          <option>Kevin</option>
+          <option>William</option>
+        </select>
+      </label>
     </fieldset>
 
 
@@ -379,13 +400,22 @@
       <div id="optItems"></div>
     </fieldset>
 
+    <fieldset>
+      <legend>Inspection Photos (optional)</legend>
+      <input type="file" id="photoInput" accept="image/*" multiple hidden>
+      <button type="button" class="btn-secondary photo-add" onclick="document.getElementById('photoInput').click()">+ Add Photos</button>
+      <p class="photo-hint">Photos only go on the printed / PDF estimate. They aren't saved or uploaded anywhere, so add them right before you print.</p>
+      <div id="photoThumbs" class="photo-thumbs"></div>
+    </fieldset>
+
     </div>
     <div class="btns">
       <a href="#sheet" class="jump-to-preview">↓ View Full Proposal Preview</a>
-      <button class="btn-primary" onclick="downloadWord()">Download as Word Document</button>
-      <button class="btn-secondary" onclick="generateCustomerLink()">Get Customer Link (Interactive)</button>
-      <button class="btn-secondary" onclick="downloadCustomerQuote()">Download Interactive File</button>
-      <button class="btn-secondary" onclick="window.print()">Print / Save as PDF</button>
+      <button class="btn-primary" onclick="downloadWord(); logEstimate('Word document')">Download as Word Document</button>
+      <button class="btn-secondary" onclick="generateCustomerLink(); logEstimate('Customer link')">Get Customer Link (Interactive)</button>
+      <button class="btn-secondary" onclick="downloadCustomerQuote(); logEstimate('Interactive file')">Download Interactive File</button>
+      <button class="btn-secondary" onclick="logEstimate('Print / PDF'); window.print()">Print / Save as PDF</button>
+      <div id="trackerStatus" class="tracker-status" aria-live="polite"></div>
     </div>
   </div>
 
@@ -721,6 +751,11 @@ function render(){
     ${totalsBlock}
 
     ${addonBlock}
+
+    ${inspectionPhotos.length ? `
+    <div class="doc-section"><h2>Photos From Your Inspection</h2>
+      <div class="photo-grid">${inspectionPhotos.map((p,i)=>`<img src="${p}" alt="Inspection photo ${i+1}">`).join('')}</div>
+    </div>` : ''}
 
     ${termsHTML}
 
@@ -1245,6 +1280,137 @@ function downloadWord(){
   link.click();
   document.body.removeChild(link);
 }
+
+// ---- Estimate tracker (Google Sheet) ----
+// Paste the Apps Script web app URL here after deploying tracker/Code.gs.
+const TRACKER_URL = 'https://script.google.com/macros/s/AKfycbyc2_MAFEufaLn_3hC-G6wPN-63nwj_e67nalBpJYEGvUzPbe56T4OicYZcH9PRyDyBrg/exec';
+const TRACKER_TOKEN = 'ch-estimates-7Q2m9X';
+
+function plainText(html){
+  const div = document.createElement('div');
+  div.innerHTML = html || '';
+  return (div.textContent || '').trim();
+}
+
+function logEstimate(action){
+  const status = document.getElementById('trackerStatus');
+  if(!TRACKER_URL){
+    if(status){ status.className = 'tracker-status err'; status.textContent = 'Tracker not connected yet'; }
+    return;
+  }
+  try {
+    const d = buildData();
+    const quoteData = gatherQuoteData();
+    const link = location.origin + location.pathname + '?quote=' +
+      encodeURIComponent(b64EncodeUnicode(JSON.stringify(quoteData)));
+    const tierTotals = d.selectedTiers.map(t => ({ label: t.label, total: d.optTotal + t.total }));
+    const optionsSummary = tierTotals.length
+      ? tierTotals.map(t => plainText(t.label) + ': ' + money(t.total)).join(' | ')
+      : 'No encapsulation option: ' + money(d.optTotal);
+    const projectTotal = tierTotals.length
+      ? Math.min.apply(null, tierTotals.map(t => t.total))
+      : d.optTotal;
+    const lineItems = d.items.filter(i => !i.isTier)
+      .map(i => plainText(i.name) + (i.qty && i.qty !== '1' ? ' x' + i.qty : '') + ' (' + (i.isFree ? 'FREE' : money(i.total)) + ')')
+      .join('; ');
+    const addons = d.addons
+      .map(i => plainText(i.name) + ' (' + money(i.total) + ')').join('; ');
+
+    const payload = {
+      token: TRACKER_TOKEN,
+      action: action,
+      estNum: d.estNum.trim(),
+      sentDate: d.sentDate,
+      clientName: d.clientName.trim(),
+      propAddress: d.propAddress.trim(),
+      clientPhone: d.clientPhone.trim(),
+      clientEmail: (document.getElementById('clientEmail').value || '').trim(),
+      sqft: d.sqft,
+      optionsSummary: optionsSummary,
+      projectTotal: Math.round(projectTotal * 100) / 100,
+      lineItems: lineItems,
+      addons: addons,
+      preparedBy: document.getElementById('preparedBy').value,
+      customerLink: link
+    };
+
+    if(status){ status.className = 'tracker-status'; status.textContent = 'Saving to estimate tracker…'; }
+    fetch(TRACKER_URL, {
+      method: 'POST',
+      mode: 'no-cors',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: JSON.stringify(payload),
+      keepalive: true
+    }).then(function(){
+      if(status){ status.className = 'tracker-status ok'; status.textContent = 'Saved to estimate tracker ✓'; }
+    }).catch(function(){
+      if(status){ status.className = 'tracker-status err'; status.textContent = 'Could not reach the tracker (check your connection)'; }
+    });
+  } catch(e){
+    if(status){ status.className = 'tracker-status err'; status.textContent = 'Tracker error: ' + e.message; }
+  }
+}
+
+// ---- Inspection photos (kept in memory only, printed with the estimate) ----
+const inspectionPhotos = [];
+
+function shrinkPhoto(file){
+  return new Promise(function(resolve){
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = function(){
+      const max = 1400;
+      const scale = Math.min(1, max / Math.max(img.width, img.height));
+      const c = document.createElement('canvas');
+      c.width = Math.round(img.width * scale);
+      c.height = Math.round(img.height * scale);
+      c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+      URL.revokeObjectURL(url);
+      resolve(c.toDataURL('image/jpeg', 0.78));
+    };
+    img.onerror = function(){ URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}
+
+function drawPhotoThumbs(){
+  const box = document.getElementById('photoThumbs');
+  if(!box) return;
+  box.innerHTML = inspectionPhotos.map((p,i)=>
+    `<div class="photo-thumb"><img src="${p}" alt=""><button type="button" title="Remove photo" onclick="removePhoto(${i})">×</button></div>`
+  ).join('');
+}
+
+function removePhoto(i){
+  inspectionPhotos.splice(i, 1);
+  drawPhotoThumbs();
+  render();
+}
+
+(function(){
+  const input = document.getElementById('photoInput');
+  if(!input) return;
+  input.addEventListener('change', async function(){
+    const files = Array.from(input.files || []);
+    for(const f of files){
+      const data = await shrinkPhoto(f);
+      if(data) inspectionPhotos.push(data);
+    }
+    input.value = '';
+    drawPhotoThumbs();
+    render();
+  });
+})();
+
+// Remember who's preparing estimates on this device.
+(function(){
+  const sel = document.getElementById('preparedBy');
+  if(!sel) return;
+  try { const saved = localStorage.getItem('ch_preparedBy'); if(saved) sel.value = saved; } catch(e){}
+  sel.addEventListener('change', function(){
+    try { localStorage.setItem('ch_preparedBy', sel.value); } catch(e){}
+  });
+})();
 
 // init defaults
 function b64EncodeUnicode(str){
