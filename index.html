@@ -284,6 +284,11 @@
   .photo-thumb{position:relative;border-radius:6px;overflow:hidden;border:1px solid var(--line);aspect-ratio:4/3;background:#EEE;}
   .photo-thumb img{width:100%;height:100%;object-fit:cover;display:block;}
   .photo-thumb button{position:absolute;top:4px;right:4px;width:26px;height:26px;padding:0;border-radius:50%;background:rgba(0,0,0,.72);color:#fff;font-size:15px;line-height:26px;}
+  .pin-row{display:flex;gap:8px;}
+  .pin-row input{flex:1;min-width:0;}
+  .pin-row button{flex-shrink:0;padding:8px 16px;}
+  .pin-saved{display:none;align-items:center;justify-content:space-between;gap:8px;font-size:13px;font-weight:700;color:#1F7A3A;}
+  .pin-change{background:none;border:none;padding:4px 0;color:var(--muted);font-size:12px;font-weight:700;text-decoration:underline;}
   /* inspection photos: on the estimate */
   .photo-grid{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:8px;}
   .photo-grid img{width:100%;aspect-ratio:4/3;object-fit:cover;display:block;border-radius:4px;border:1px solid #DDD;break-inside:avoid;page-break-inside:avoid;}
@@ -406,6 +411,21 @@
       <button type="button" class="btn-secondary photo-add" onclick="document.getElementById('photoInput').click()">+ Add Photos</button>
       <p class="photo-hint">Photos only go on the printed / PDF estimate. They aren't saved or uploaded anywhere, so add them right before you print.</p>
       <div id="photoThumbs" class="photo-thumbs"></div>
+    </fieldset>
+
+    <fieldset>
+      <legend>Estimate Tracker</legend>
+      <div id="pinEntry">
+        <div class="pin-row">
+          <input type="password" id="trackerPin" inputmode="numeric" autocomplete="off" placeholder="Tracker PIN">
+          <button type="button" class="btn-primary" onclick="saveTrackerPin()">Save</button>
+        </div>
+        <p class="photo-hint">Enter once on this phone. Estimates aren't logged to the tracker until a PIN is saved.</p>
+      </div>
+      <div id="pinSaved" class="pin-saved">
+        <span>Tracker PIN saved on this device ✓</span>
+        <button type="button" class="pin-change" onclick="changeTrackerPin()">Change</button>
+      </div>
     </fieldset>
 
     </div>
@@ -1282,9 +1302,30 @@ function downloadWord(){
 }
 
 // ---- Estimate tracker (Google Sheet) ----
-// Paste the Apps Script web app URL here after deploying tracker/Code.gs.
 const TRACKER_URL = 'https://script.google.com/macros/s/AKfycbyc2_MAFEufaLn_3hC-G6wPN-63nwj_e67nalBpJYEGvUzPbe56T4OicYZcH9PRyDyBrg/exec';
-const TRACKER_TOKEN = 'ch-estimates-7Q2m9X';
+// The PIN is NOT stored in this page. Each phone enters it once and keeps it in its own storage.
+const PIN_KEY = 'ch_trackerPin';
+function getTrackerPin(){ try { return localStorage.getItem(PIN_KEY) || ''; } catch(e){ return ''; } }
+function drawPinBox(){
+  const has = !!getTrackerPin();
+  const entry = document.getElementById('pinEntry'), saved = document.getElementById('pinSaved');
+  if(entry) entry.style.display = has ? 'none' : 'block';
+  if(saved) saved.style.display = has ? 'flex' : 'none';
+}
+function saveTrackerPin(){
+  const input = document.getElementById('trackerPin');
+  const v = (input.value || '').trim();
+  if(!v) return;
+  try { localStorage.setItem(PIN_KEY, v); } catch(e){}
+  input.value = '';
+  drawPinBox();
+}
+function changeTrackerPin(){
+  try { localStorage.removeItem(PIN_KEY); } catch(e){}
+  drawPinBox();
+  const input = document.getElementById('trackerPin');
+  if(input) input.focus();
+}
 
 function plainText(html){
   const div = document.createElement('div');
@@ -1294,8 +1335,9 @@ function plainText(html){
 
 function logEstimate(action){
   const status = document.getElementById('trackerStatus');
-  if(!TRACKER_URL){
-    if(status){ status.className = 'tracker-status err'; status.textContent = 'Tracker not connected yet'; }
+  const pin = getTrackerPin();
+  if(!TRACKER_URL || !pin){
+    if(status){ status.className = 'tracker-status err'; status.textContent = 'Not saved to tracker: enter your Tracker PIN above'; }
     return;
   }
   try {
@@ -1317,7 +1359,7 @@ function logEstimate(action){
       .map(i => plainText(i.name) + ' (' + money(i.total) + ')').join('; ');
 
     const payload = {
-      token: TRACKER_TOKEN,
+      token: pin,
       action: action,
       estNum: d.estNum.trim(),
       sentDate: d.sentDate,
@@ -1401,6 +1443,8 @@ function removePhoto(i){
     render();
   });
 })();
+
+drawPinBox();
 
 // Remember who's preparing estimates on this device.
 (function(){
